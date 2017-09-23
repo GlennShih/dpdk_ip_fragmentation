@@ -68,8 +68,6 @@
 #include <rte_ethdev.h>
 #include <rte_mempool.h>
 #include <rte_mbuf.h>
-#include <rte_lpm.h>
-#include <rte_lpm6.h>
 #include <rte_ip.h>
 #include <rte_string_fns.h>
 
@@ -83,17 +81,15 @@
 #define	ROUNDUP_DIV(a, b)	(((a) + (b) - 1) / (b))
 
 /*
- * Default byte size for the IPv6 Maximum Transfer Unit (MTU).
- * This value includes the size of IPv6 header.
+ * Default byte size for the IPv4 Maximum Transfer Unit (MTU).
+ * This value includes the size of IPv4 header.
  */
 #define	IPV4_MTU_DEFAULT	ETHER_MTU
-#define	IPV6_MTU_DEFAULT	ETHER_MTU
 
 /*
- * Default payload in bytes for the IPv6 packet.
+ * Default payload in bytes for the IPv4 packet.
  */
 #define	IPV4_DEFAULT_PAYLOAD	(IPV4_MTU_DEFAULT - sizeof(struct ipv4_hdr))
-#define	IPV6_DEFAULT_PAYLOAD	(IPV6_MTU_DEFAULT - sizeof(struct ipv6_hdr))
 
 /*
  * Max number of fragments per packet expected - defined by config file.
@@ -128,7 +124,6 @@ static struct ether_addr ports_eth_addr[RTE_MAX_ETHPORTS];
 		(uint8_t) ((addr) & 0xFF)
 #endif
 
-#define IPV6_ADDR_LEN 16
 
 /* mask of enabled ports */
 static int enabled_port_mask = 0;
@@ -145,8 +140,6 @@ struct mbuf_table {
 struct rx_queue {
 	struct rte_mempool *direct_pool;
 	struct rte_mempool *indirect_pool;
-	struct rte_lpm *lpm;
-	struct rte_lpm6 *lpm6;
 	uint8_t portid;
 };
 
@@ -175,14 +168,9 @@ static const struct rte_eth_conf port_conf = {
 	},
 };
 
-#define LPM_MAX_RULES         1024
-#define LPM6_MAX_RULES         1024
-#define LPM6_NUMBER_TBL8S (1 << 16)
 
 static struct rte_mempool *socket_direct_pool[RTE_MAX_NUMA_NODES];
 static struct rte_mempool *socket_indirect_pool[RTE_MAX_NUMA_NODES];
-static struct rte_lpm *socket_lpm[RTE_MAX_NUMA_NODES];
-static struct rte_lpm6 *socket_lpm6[RTE_MAX_NUMA_NODES];
 
 /*uint32_t to ip address function 20170904 */
 void print_ip(int ip)
@@ -217,22 +205,11 @@ send_burst(struct lcore_queue_conf *qconf, uint16_t n, uint8_t port)
 }
 
 static inline void
-l3fwd_simple_forward(struct rte_mbuf *m, struct lcore_queue_conf *qconf,
-		uint8_t queueid, uint8_t port_in)
+read_and_print_ipv4_info(struct rte_mbuf *m)
 {
-	struct rx_queue *rxq;
-	uint32_t i, len, next_hop_ipv4;
-	uint8_t next_hop_ipv6, port_out, ipv6;
-	int32_t len2;
-
-	ipv6 = 0;
-	rxq = &qconf->rx_queue_list[queueid];
 
 	/* Remove the Ethernet header and trailer from the input packet */
 	rte_pktmbuf_adj(m, (uint16_t)sizeof(struct ether_hdr));
-
-	/* Build transmission burst */
-	len = qconf->tx_mbufs[port_out].len;
 
 	/* if this is an IPv4 packet */
 	if (RTE_ETH_IS_IPV4_HDR(m->packet_type)) {
@@ -241,7 +218,7 @@ l3fwd_simple_forward(struct rte_mbuf *m, struct lcore_queue_conf *qconf,
 	    uint32_t ip_src; //20170830	
         uint16_t total_len; //20170902 16 bits unsign int total_length
 
-    /* Read the lookup key (i.e. ip_dst) from the input packet */
+    /* Read the ipv4 ip (i.e. ip_dst, ip_src) from the input packet */
 		ip_hdr = rte_pktmbuf_mtod(m, struct ipv4_hdr *);
 
 		ip_dst = rte_be_to_cpu_32(ip_hdr->dst_addr);
@@ -343,12 +320,12 @@ main_loop(__attribute__((unused)) void *dummy)
 			for (j = 0; j < (nb_rx - PREFETCH_OFFSET); j++) {
 				rte_prefetch0(rte_pktmbuf_mtod(pkts_burst[
 						j + PREFETCH_OFFSET], void *));
-				l3fwd_simple_forward(pkts_burst[j], qconf, i, portid);
+				read_and_print_ipv4_info(pkts_burst[j]);
 			}
 
 			/* Forward remaining prefetched packets */
 			for (; j < nb_rx; j++) {
-				l3fwd_simple_forward(pkts_burst[j], qconf, i, portid);
+				read_and_print_ipv4_info(pkts_burst[j]);
 			}
 		}
 	}
@@ -530,7 +507,7 @@ static int
 check_ptype(int portid)
 {
 	int i, ret;
-	int ptype_l3_ipv4 = 0, ptype_l3_ipv6 = 0;
+	int ptype_l3_ipv4 = 0;
 	uint32_t ptype_mask = RTE_PTYPE_L3_MASK;
 
 	ret = rte_eth_dev_get_supported_ptypes(portid, ptype_mask, NULL, 0);
@@ -543,18 +520,10 @@ check_ptype(int portid)
 	for (i = 0; i < ret; ++i) {
 		if (ptypes[i] & RTE_PTYPE_L3_IPV4)
 			ptype_l3_ipv4 = 1;
-		if (ptypes[i] & RTE_PTYPE_L3_IPV6)
-			ptype_l3_ipv6 = 1;
 	}
 
 	if (ptype_l3_ipv4 == 0)
 		printf("port %d cannot parse RTE_PTYPE_L3_IPV4\n", portid);
-
-	if (ptype_l3_ipv6 == 0)
-		printf("port %d cannot parse RTE_PTYPE_L3_IPV6\n", portid);
-
-	if (ptype_l3_ipv4 && ptype_l3_ipv6)
-		return 1;
 
 	return 0;
 
@@ -572,8 +541,6 @@ parse_ptype(struct rte_mbuf *m)
 	ether_type = eth_hdr->ether_type;
 	if (ether_type == rte_cpu_to_be_16(ETHER_TYPE_IPv4))
 		packet_type |= RTE_PTYPE_L3_IPV4_EXT_UNKNOWN;
-	else if (ether_type == rte_cpu_to_be_16(ETHER_TYPE_IPv6))
-		packet_type |= RTE_PTYPE_L3_IPV6_EXT_UNKNOWN;
 
 	m->packet_type = packet_type;
 }
@@ -598,9 +565,6 @@ init_mem(void)
 {
 	char buf[PATH_MAX];
 	struct rte_mempool *mp;
-	struct rte_lpm *lpm;
-	struct rte_lpm6 *lpm6;
-	struct rte_lpm_config lpm_config;
 	int socket;
 	unsigned lcore_id;
 
@@ -680,7 +644,7 @@ main(int argc, char **argv)
 
 	nb_lcores = rte_lcore_count();
 
-	/* initialize structures (mempools, lpm etc.) */
+	/* initialize structures (mempools etc.) */
 	if (init_mem() < 0)
 		rte_panic("Cannot initialize memory structures!\n");
 
@@ -717,8 +681,6 @@ main(int argc, char **argv)
 		rxq->portid = portid;
 		rxq->direct_pool = socket_direct_pool[socket];
 		rxq->indirect_pool = socket_indirect_pool[socket];
-		rxq->lpm = socket_lpm[socket];
-		rxq->lpm6 = socket_lpm6[socket];
 		qconf->n_rx_queue++;
 
 		/* init port */
