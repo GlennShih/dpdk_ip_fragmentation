@@ -128,16 +128,6 @@ static struct ether_addr ports_eth_addr[RTE_MAX_ETHPORTS];
 		(uint8_t) ((addr) & 0xFF)
 #endif
 
-#ifndef IPv6_BYTES
-#define IPv6_BYTES_FMT "%02x%02x:%02x%02x:%02x%02x:%02x%02x:"\
-                       "%02x%02x:%02x%02x:%02x%02x:%02x%02x"
-#define IPv6_BYTES(addr) \
-	addr[0],  addr[1], addr[2],  addr[3], \
-	addr[4],  addr[5], addr[6],  addr[7], \
-	addr[8],  addr[9], addr[10], addr[11],\
-	addr[12], addr[13],addr[14], addr[15]
-#endif
-
 #define IPV6_ADDR_LEN 16
 
 /* mask of enabled ports */
@@ -185,56 +175,9 @@ static const struct rte_eth_conf port_conf = {
 	},
 };
 
-/*
- * IPv4 forwarding table
- */
-struct l3fwd_ipv4_route {
-	uint32_t ip;
-	uint8_t  depth;
-	uint8_t  if_out;
-};
-
-struct l3fwd_ipv4_route l3fwd_ipv4_route_array[] = {
-		{IPv4(100,10,0,0), 16, 0},
-		{IPv4(100,20,0,0), 16, 1},
-		{IPv4(100,30,0,0), 16, 2},
-		{IPv4(100,40,0,0), 16, 3},
-		{IPv4(100,50,0,0), 16, 4},
-		{IPv4(100,60,0,0), 16, 5},
-		{IPv4(100,70,0,0), 16, 6},
-		{IPv4(100,80,0,0), 16, 7},
-};
-
-/*
- * IPv6 forwarding table
- */
-
-struct l3fwd_ipv6_route {
-	uint8_t ip[IPV6_ADDR_LEN];
-	uint8_t depth;
-	uint8_t if_out;
-};
-
-static struct l3fwd_ipv6_route l3fwd_ipv6_route_array[] = {
-	{{1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1}, 48, 0},
-	{{2,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1}, 48, 1},
-	{{3,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1}, 48, 2},
-	{{4,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1}, 48, 3},
-	{{5,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1}, 48, 4},
-	{{6,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1}, 48, 5},
-	{{7,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1}, 48, 6},
-	{{8,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1}, 48, 7},
-};
-
 #define LPM_MAX_RULES         1024
 #define LPM6_MAX_RULES         1024
 #define LPM6_NUMBER_TBL8S (1 << 16)
-
-struct rte_lpm6_config lpm6_config = {
-		.max_rules = LPM6_MAX_RULES,
-		.number_tbl8s = LPM6_NUMBER_TBL8S,
-		.flags = 0
-};
 
 static struct rte_mempool *socket_direct_pool[RTE_MAX_NUMA_NODES];
 static struct rte_mempool *socket_indirect_pool[RTE_MAX_NUMA_NODES];
@@ -285,9 +228,6 @@ l3fwd_simple_forward(struct rte_mbuf *m, struct lcore_queue_conf *qconf,
 	ipv6 = 0;
 	rxq = &qconf->rx_queue_list[queueid];
 
-	/* by default, send everything back to the source port */
-	port_out = port_in;
-
 	/* Remove the Ethernet header and trailer from the input packet */
 	rte_pktmbuf_adj(m, (uint16_t)sizeof(struct ether_hdr));
 
@@ -322,111 +262,10 @@ l3fwd_simple_forward(struct rte_mbuf *m, struct lcore_queue_conf *qconf,
         printf("%" PRIu16 "\n" ,total_len);//20170831
         printf("\n");       
  
-		/* Find destination port */
-		if (rte_lpm_lookup(rxq->lpm, ip_dst, &next_hop_ipv4) == 0 &&
-				(enabled_port_mask & 1 << next_hop_ipv4) != 0) {
-			port_out = next_hop_ipv4;
+	} 
 
-			/* Build transmission burst for new port */
-			len = qconf->tx_mbufs[port_out].len;
-		}
-
-		/* if we don't need to do any fragmentation */
-		if (likely (IPV4_MTU_DEFAULT >= m->pkt_len)) {
-			qconf->tx_mbufs[port_out].m_table[len] = m;
-			len2 = 1;
-		} else {
-			len2 = rte_ipv4_fragment_packet(m,
-				&qconf->tx_mbufs[port_out].m_table[len],
-				(uint16_t)(MBUF_TABLE_SIZE - len),
-				IPV4_MTU_DEFAULT,
-				rxq->direct_pool, rxq->indirect_pool);
-
-			/* Free input packet */
-			rte_pktmbuf_free(m);
-
-			/* If we fail to fragment the packet */
-			if (unlikely (len2 < 0))
-				return;
-		}
-	} else if (RTE_ETH_IS_IPV6_HDR(m->packet_type)) {
-		/* if this is an IPv6 packet */
-		struct ipv6_hdr *ip_hdr;
-
-		ipv6 = 1;
-
-		/* Read the lookup key (i.e. ip_dst) from the input packet */
-		ip_hdr = rte_pktmbuf_mtod(m, struct ipv6_hdr *);
-
-		/* Find destination port */
-		if (rte_lpm6_lookup(rxq->lpm6, ip_hdr->dst_addr, &next_hop_ipv6) == 0 &&
-				(enabled_port_mask & 1 << next_hop_ipv6) != 0) {
-			port_out = next_hop_ipv6;
-
-			/* Build transmission burst for new port */
-			len = qconf->tx_mbufs[port_out].len;
-		}
-
-		/* if we don't need to do any fragmentation */
-		if (likely (IPV6_MTU_DEFAULT >= m->pkt_len)) {
-			qconf->tx_mbufs[port_out].m_table[len] = m;
-			len2 = 1;
-		} else {
-			len2 = rte_ipv6_fragment_packet(m,
-				&qconf->tx_mbufs[port_out].m_table[len],
-				(uint16_t)(MBUF_TABLE_SIZE - len),
-				IPV6_MTU_DEFAULT,
-				rxq->direct_pool, rxq->indirect_pool);
-
-			/* Free input packet */
-			rte_pktmbuf_free(m);
-
-			/* If we fail to fragment the packet */
-			if (unlikely (len2 < 0))
-				return;
-		}
-	}
-	/* else, just forward the packet */
-	else {
-		qconf->tx_mbufs[port_out].m_table[len] = m;
-		len2 = 1;
-	}
-
-	for (i = len; i < len + len2; i ++) {
-		void *d_addr_bytes;
-
-		m = qconf->tx_mbufs[port_out].m_table[i];
-		struct ether_hdr *eth_hdr = (struct ether_hdr *)
-			rte_pktmbuf_prepend(m, (uint16_t)sizeof(struct ether_hdr));
-		if (eth_hdr == NULL) {
-			rte_panic("No headroom in mbuf.\n");
-		}
-
-		m->l2_len = sizeof(struct ether_hdr);
-
-		/* 02:00:00:00:00:xx */
-		d_addr_bytes = &eth_hdr->d_addr.addr_bytes[0];
-		*((uint64_t *)d_addr_bytes) = 0x000000000002 + ((uint64_t)port_out << 40);
-
-		/* src addr */
-		ether_addr_copy(&ports_eth_addr[port_out], &eth_hdr->s_addr);
-		if (ipv6)
-			eth_hdr->ether_type = rte_be_to_cpu_16(ETHER_TYPE_IPv6);
-		else
-			eth_hdr->ether_type = rte_be_to_cpu_16(ETHER_TYPE_IPv4);
-	}
-
-	len += len2;
-
-	if (likely(len < MAX_PKT_BURST)) {
-		qconf->tx_mbufs[port_out].len = (uint16_t)len;
-		return;
-	}
-
-	/* Transmit packets */
-	send_burst(qconf, (uint16_t)len, port_out);
-	qconf->tx_mbufs[port_out].len = 0;
 }
+
 
 /* main processing loop */
 static int
@@ -755,66 +594,6 @@ cb_parse_ptype(uint8_t port __rte_unused, uint16_t queue __rte_unused,
 }
 
 static int
-init_routing_table(void)
-{
-	struct rte_lpm *lpm;
-	struct rte_lpm6 *lpm6;
-	int socket, ret;
-	unsigned i;
-
-	for (socket = 0; socket < RTE_MAX_NUMA_NODES; socket++) {
-		if (socket_lpm[socket]) {
-			lpm = socket_lpm[socket];
-			/* populate the LPM table */
-			for (i = 0; i < RTE_DIM(l3fwd_ipv4_route_array); i++) {
-				ret = rte_lpm_add(lpm,
-					l3fwd_ipv4_route_array[i].ip,
-					l3fwd_ipv4_route_array[i].depth,
-					l3fwd_ipv4_route_array[i].if_out);
-
-				if (ret < 0) {
-					RTE_LOG(ERR, IP_FRAG, "Unable to add entry %i to the l3fwd "
-						"LPM table\n", i);
-					return -1;
-				}
-
-				RTE_LOG(INFO, IP_FRAG, "Socket %i: adding route " IPv4_BYTES_FMT
-						"/%d (port %d)\n",
-					socket,
-					IPv4_BYTES(l3fwd_ipv4_route_array[i].ip),
-					l3fwd_ipv4_route_array[i].depth,
-					l3fwd_ipv4_route_array[i].if_out);
-			}
-		}
-
-		if (socket_lpm6[socket]) {
-			lpm6 = socket_lpm6[socket];
-			/* populate the LPM6 table */
-			for (i = 0; i < RTE_DIM(l3fwd_ipv6_route_array); i++) {
-				ret = rte_lpm6_add(lpm6,
-					l3fwd_ipv6_route_array[i].ip,
-					l3fwd_ipv6_route_array[i].depth,
-					l3fwd_ipv6_route_array[i].if_out);
-
-				if (ret < 0) {
-					RTE_LOG(ERR, IP_FRAG, "Unable to add entry %i to the l3fwd "
-						"LPM6 table\n", i);
-					return -1;
-				}
-
-				RTE_LOG(INFO, IP_FRAG, "Socket %i: adding route " IPv6_BYTES_FMT
-						"/%d (port %d)\n",
-					socket,
-					IPv6_BYTES(l3fwd_ipv6_route_array[i].ip),
-					l3fwd_ipv6_route_array[i].depth,
-					l3fwd_ipv6_route_array[i].if_out);
-			}
-		}
-	}
-	return 0;
-}
-
-static int
 init_mem(void)
 {
 	char buf[PATH_MAX];
@@ -863,34 +642,6 @@ init_mem(void)
 				return -1;
 			}
 			socket_indirect_pool[socket] = mp;
-		}
-
-		if (socket_lpm[socket] == NULL) {
-			RTE_LOG(INFO, IP_FRAG, "Creating LPM table on socket %i\n", socket);
-			snprintf(buf, sizeof(buf), "IP_FRAG_LPM_%i", socket);
-
-			lpm_config.max_rules = LPM_MAX_RULES;
-			lpm_config.number_tbl8s = 256;
-			lpm_config.flags = 0;
-
-			lpm = rte_lpm_create(buf, socket, &lpm_config);
-			if (lpm == NULL) {
-				RTE_LOG(ERR, IP_FRAG, "Cannot create LPM table\n");
-				return -1;
-			}
-			socket_lpm[socket] = lpm;
-		}
-
-		if (socket_lpm6[socket] == NULL) {
-			RTE_LOG(INFO, IP_FRAG, "Creating LPM6 table on socket %i\n", socket);
-			snprintf(buf, sizeof(buf), "IP_FRAG_LPM_%i", socket);
-
-			lpm6 = rte_lpm6_create(buf, socket, &lpm6_config);
-			if (lpm6 == NULL) {
-				RTE_LOG(ERR, IP_FRAG, "Cannot create LPM table\n");
-				return -1;
-			}
-			socket_lpm6[socket] = lpm6;
 		}
 	}
 
@@ -1052,9 +803,6 @@ main(int argc, char **argv)
 				" port = %d\n", portid);
 		}
 	}
-
-	if (init_routing_table() < 0)
-		rte_exit(EXIT_FAILURE, "Cannot init routing table\n");
 
 	check_all_ports_link_status((uint8_t)nb_ports, enabled_port_mask);
 
