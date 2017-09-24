@@ -183,27 +183,6 @@ void print_ip(int ip)
     printf("%d.%d.%d.%d\n", bytes[3], bytes[2], bytes[1], bytes[0]);        
 }
 
-/* Send burst of packets on an output interface */
-static inline int
-send_burst(struct lcore_queue_conf *qconf, uint16_t n, uint8_t port)
-{
-	struct rte_mbuf **m_table;
-	int ret;
-	uint16_t queueid;
-
-	queueid = qconf->tx_queue_id[port];
-	m_table = (struct rte_mbuf **)qconf->tx_mbufs[port].m_table;
-
-	ret = rte_eth_tx_burst(port, queueid, m_table, n);
-	if (unlikely(ret < n)) {
-		do {
-			rte_pktmbuf_free(m_table[ret]);
-		} while (++ret < n);
-	}
-
-	return 0;
-}
-
 static inline void
 read_and_print_ipv4_info(struct rte_mbuf *m)
 {
@@ -250,13 +229,9 @@ main_loop(__attribute__((unused)) void *dummy)
 {
 	struct rte_mbuf *pkts_burst[MAX_PKT_BURST];
 	unsigned lcore_id;
-	uint64_t prev_tsc, diff_tsc, cur_tsc;
 	int i, j, nb_rx;
 	uint8_t portid;
 	struct lcore_queue_conf *qconf;
-	const uint64_t drain_tsc = (rte_get_tsc_hz() + US_PER_S - 1) / US_PER_S * BURST_TX_DRAIN_US;
-
-	prev_tsc = 0;
 
 	lcore_id = rte_lcore_id();
 	qconf = &lcore_queue_conf[lcore_id];
@@ -277,30 +252,6 @@ main_loop(__attribute__((unused)) void *dummy)
 
 	while (1) {
 
-		cur_tsc = rte_rdtsc();
-
-		/*
-		 * TX burst queue drain
-		 */
-		diff_tsc = cur_tsc - prev_tsc;
-		if (unlikely(diff_tsc > drain_tsc)) {
-
-			/*
-			 * This could be optimized (use queueid instead of
-			 * portid), but it is not called so often
-			 */
-			for (portid = 0; portid < RTE_MAX_ETHPORTS; portid++) {
-				if (qconf->tx_mbufs[portid].len == 0)
-					continue;
-				send_burst(&lcore_queue_conf[lcore_id],
-					   qconf->tx_mbufs[portid].len,
-					   portid);
-				qconf->tx_mbufs[portid].len = 0;
-			}
-
-			prev_tsc = cur_tsc;
-		}
-
 		/*
 		 * Read packet from RX queues
 		 */
@@ -316,14 +267,14 @@ main_loop(__attribute__((unused)) void *dummy)
 						pkts_burst[j], void *));
 			}
 
-			/* Prefetch and forward already prefetched packets */
+			/* Prefetch and print already prefetched packets */
 			for (j = 0; j < (nb_rx - PREFETCH_OFFSET); j++) {
 				rte_prefetch0(rte_pktmbuf_mtod(pkts_burst[
 						j + PREFETCH_OFFSET], void *));
 				read_and_print_ipv4_info(pkts_burst[j]);
 			}
 
-			/* Forward remaining prefetched packets */
+			/* print remaining prefetched packets */
 			for (; j < nb_rx; j++) {
 				read_and_print_ipv4_info(pkts_burst[j]);
 			}
