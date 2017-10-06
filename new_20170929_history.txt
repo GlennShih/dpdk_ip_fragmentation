@@ -1,0 +1,90 @@
+    1  sudo apt update
+    5  sudo apt upgrade
+    7  lspci
+    8  sudo apt install ssh wireshark
+
+
+   測dpdk example
+
+   58  wget http://fast.dpdk.org/rel/dpdk-17.05.2.tar.xz
+   59  tar xf dpdk-17.05.2.tar.xz
+   69  export DPDK_DIR=$HOME/dpdk/dpdk-stable-17.05.2
+   81  export DPDK_TARGET=x86_64-native-linuxapp-gcc
+   82  export DPDK_BUILD=$DPDK_DIR/$DPDK_TARGET
+   83  sudo make install T=$DPDK_TARGET DESTDIR=install
+   89  sudo ./dpdk-setup.sh 
+   95  export RTE_SDK=$HOME/dpdk/dpdk-stable-17.05.2
+   98  export RTE_TARGET=x86_64-native-linuxapp-gcc
+   99  make
+  131  sudo ./build/ip_fragmentation -l 2,4 -n 2 -- -p 0x3 -q 2
+  
+  裝ovs2.6.0 Fail
+
+  133  sudo apt-get install git dh-autoreconf libssl-dev openssl
+  137  sudo wget http://openvswitch.org/releases/openvswitch-2.6.0.tar.gz
+  139  sudo tar -xf openvswitch-2.6.0.tar.gz 
+  143  cd openvswitch-2.6.0/
+  144  sudo ./boot.sh 
+  145  sudo ./configure --with-dpdk=$DPDK_BUILD
+  146  sudo make
+  147  sudo apt install python-pip
+  150  pip install --upgrade pip
+  151  sudo pip install six
+  153  sudo make
+  156  sudo apt install libarchive-dev
+  161  sudo apt install libarchive13
+  165  sudo apt install libfuse-dev fuse
+
+
+  裝ovs最新版
+
+  173  sudo git clone https://github.com/openvswitch/ovs.git
+  175  cd ovs/
+  176  sudo ./boot.sh 
+  177  sudo ./configure --with-dpdk=$DPDK_BUILD
+  178  sudo make
+  179  sudo make install
+  181  sudo modprobe gre
+  182  sudo modprobe openvswitch
+  183  sudo modprobe libcrc32c
+  184  sudo ovsdb-tool create /usr/local/etc/openvswitch/conf.db /usr/local/share/openvswitch/vswitch.ovsschema
+  185  grep HugePages_ /proc/meminfo
+  186  dmesg | grep -e DMAR -e IOMMU
+  187  cat /proc/cmdline | grep iommu=pt
+  188  cat /proc/cmdline | grep intel_iommu=on
+  190  sudo modprobe vfio-pci
+  191  sudo chmod a+x /dev/vfio
+  192  sudo chmod 0666 /dev/vfio/*
+  193  export PATH=$PATH:/usr/local/share/openvswitch/scripts
+  194  export DB_SOCK=/usr/local/var/run/openvswitch/db.sock
+  196  cd /usr/local/var/
+  197  ls
+  198  sudo mkdir log
+  199  ls
+  200  cd log/
+  201  sudo mkdir openvswitch
+  202  ls
+  203  cd openvswitch/
+  204  cd ..
+  205  ls
+  206  sudo mkdir run
+  207  cd run/
+  208  sudo mkdir openvswitch
+  209  cd openvswitch/
+  210  cd ..
+  211  cd ovs/
+  
+  連結 啟動 ovs
+
+  212  sudo ovsdb-server --remote=punix:/usr/local/var/run/openvswitch/db.sock --remote=db:Open_vSwitch,Open_vSwitch,manager_options --private-key=db:Open_vSwitch,SSL,private_key --certificate=db:Open_vSwitch,SSL,certificate --bootstrap-ca-cert=db:Open_vSwitch,SSL,ca_cert --pidfile --detach --log-file
+  213  sudo ovs-vsctl --no-wait set Open_vSwitch . other_config:dpdk-init=true
+  214  sudo sudo ovs-vswitchd --pidfile --detach --log-file
+  215  ovs-vsctl add-br br0 -- set bridge br0 datapath_type=netdev
+  216  sudo ovs-vsctl add-br br0 -- set bridge br0 datapath_type=netdev
+  217  sudo ovs-vsctl add-port br0 myportnameone -- set Interface myportnameone     type=dpdk options:dpdk-devargs=0000:03:00.0
+  218  sudo ovs-vsctl add-port br0 myportnametwo -- set Interface myportnametwo     type=dpdk options:dpdk-devargs=0000:03:00.1
+  219  sudo ovs-ofctl dump-flows br0
+
+  223  sudo ./build/ip_fragmentation -l 2,4 -n 2 -- -p 0x3 -q 2
+  224  sudo kill `cd /usr/local/var/run/openvswitch && cat ovsdb-server.pid ovs-vswitchd.pid`
+  225  sudo ./build/ip_fragmentation -l 2,4 -n 2 -- -p 0x3 -q 2
